@@ -1,36 +1,56 @@
 // ==UserScript==
-// @name         Stop Doomscrolling on X.com
+// @name         Configurable Doomscrolling Stopper
 // @namespace    https://adamandreasson.se/
-// @version      0.5
-// @description  Prompts the user after scrolling every 4000 pixels on X.com with a 5-second timer on Yes button
+// @version      0.6
+// @description  Prompts user to stop doomscrolling on configured websites/URLs with a 5-second timer
 // @author       Grok 3
-// @match        https://x.com/*
-// @grant        none
+// @match        *://*/*
+// @grant        GM_setValue
+// @grant        GM_getValue
+// @grant        GM_registerMenuCommand
 // ==/UserScript==
 
 (function () {
 	"use strict";
 
-	// Configuration
-	const THRESHOLD_INTERVAL = 4000; // Interval in pixels for triggering the prompt
-	let lastDismissed = 0; // Tracks the last dismissed threshold
-	let currentOverlay = null; // Reference to the current overlay element
+	// Default configuration
+	const DEFAULT_CONFIG = {
+		sites: [{ pattern: "https://x.com/*", enabled: true }],
+		threshold: 4000,
+	};
+
+	// Load or initialize configuration
+	let config = GM_getValue("doomscrollConfig", DEFAULT_CONFIG);
+	let lastDismissed = 0;
+	let currentOverlay = null;
+
+	// Check if current URL matches any configured patterns
+	function matchesCurrentUrl() {
+		const currentUrl = window.location.href;
+		return config.sites.some((site) => {
+			if (!site.enabled) return false;
+			const regex = new RegExp("^" + site.pattern.replace(/\*/g, ".*") + "$");
+			return regex.test(currentUrl);
+		});
+	}
 
 	// Create the overlay prompt element
 	function createOverlay() {
 		const overlay = document.createElement("div");
-		overlay.style.position = "fixed";
-		overlay.style.top = "0";
-		overlay.style.left = "0";
-		overlay.style.width = "100vw";
-		overlay.style.height = "100vh";
-		overlay.style.backgroundColor = "rgba(80, 0, 0, 1)";
-		overlay.style.zIndex = "10000";
-		overlay.style.display = "flex";
-		overlay.style.justifyContent = "center";
-		overlay.style.alignItems = "center";
-		overlay.style.color = "white";
-		overlay.style.fontSize = "24px";
+		overlay.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background-color: rgba(80, 0, 0, 1);
+            z-index: 10000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            font-size: 24px;
+        `;
 		overlay.innerHTML = `
             <div style="text-align: center;">
                 <p>You appear to be doomscrolling.</p>
@@ -39,10 +59,7 @@
             </div>
         `;
 
-		// Get the button reference
 		const button = overlay.querySelector("#confirm-doomscrolling");
-
-		// Start 5-second countdown
 		let countdown = 5;
 		button.textContent = `Yes (${countdown})`;
 
@@ -57,10 +74,9 @@
 			}
 		}, 1000);
 
-		// Add event listener to the button
 		button.addEventListener("click", () => {
 			if (!button.disabled) {
-				lastDismissed += THRESHOLD_INTERVAL;
+				lastDismissed += config.threshold;
 				if (currentOverlay) {
 					currentOverlay.remove();
 					currentOverlay = null;
@@ -71,28 +87,90 @@
 		return overlay;
 	}
 
-	// Handle scroll events to show/hide the overlay based on scroll position
+	// Handle scroll events
 	function onScroll() {
+		if (!matchesCurrentUrl()) return;
+
 		const scrollY = window.scrollY || document.documentElement.scrollTop;
-		if (scrollY > lastDismissed + THRESHOLD_INTERVAL && !currentOverlay) {
+		if (scrollY > lastDismissed + config.threshold && !currentOverlay) {
 			currentOverlay = createOverlay();
 			document.body.appendChild(currentOverlay);
-		} else if (
-			scrollY <= lastDismissed + THRESHOLD_INTERVAL &&
-			currentOverlay
-		) {
+		} else if (scrollY <= lastDismissed + config.threshold && currentOverlay) {
 			currentOverlay.remove();
 			currentOverlay = null;
 		}
 	}
 
-	// Initialize the script
+	// Configuration menu
+	GM_registerMenuCommand("Configure Doomscrolling Settings", () => {
+		const configWindow = window.open(
+			"",
+			"Doomscrolling Config",
+			"width=400,height=500"
+		);
+		configWindow.document.body.innerHTML = `
+            <h2>Doomscrolling Settings</h2>
+            <label>Scroll Threshold (pixels): <input type="number" id="threshold" value="${config.threshold}"></label><br><br>
+            <h3>Sites</h3>
+            <div id="sitesList"></div>
+            <button id="addSite">Add Site</button>
+            <button id="saveConfig">Save</button>
+        `;
+
+		const sitesList = configWindow.document.getElementById("sitesList");
+		function renderSites() {
+			sitesList.innerHTML = "";
+			config.sites.forEach((site, index) => {
+				sitesList.innerHTML += `
+                    <div>
+                        <input type="checkbox" ${
+													site.enabled ? "checked" : ""
+												} id="enabled${index}">
+                        <input type="text" value="${
+													site.pattern
+												}" id="pattern${index}">
+                        <button onclick="this.parentElement.remove()">Delete</button>
+                    </div>
+                `;
+			});
+		}
+		renderSites();
+
+		configWindow.document
+			.getElementById("addSite")
+			.addEventListener("click", () => {
+				config.sites.push({ pattern: "https://example.com/*", enabled: true });
+				renderSites();
+			});
+
+		configWindow.document
+			.getElementById("saveConfig")
+			.addEventListener("click", () => {
+				config.threshold =
+					parseInt(configWindow.document.getElementById("threshold").value) ||
+					DEFAULT_CONFIG.threshold;
+				const newSites = [];
+				sitesList.querySelectorAll("div").forEach((div) => {
+					const index = Array.from(sitesList.children).indexOf(div);
+					newSites.push({
+						enabled: div.querySelector(`#enabled${index}`).checked,
+						pattern: div.querySelector(`#pattern${index}`).value,
+					});
+				});
+				config.sites = newSites;
+				GM_setValue("doomscrollConfig", config);
+				configWindow.close();
+			});
+	});
+
+	// Initialize
 	function initialize() {
-		window.addEventListener("scroll", onScroll);
-		onScroll();
+		if (matchesCurrentUrl()) {
+			window.addEventListener("scroll", onScroll);
+			onScroll();
+		}
 	}
 
-	// Run initialization when DOM is ready
 	if (
 		document.readyState === "complete" ||
 		document.readyState === "interactive"
